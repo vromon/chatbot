@@ -76,11 +76,10 @@ export default function RootLayout({
           disableTransitionOnChange
           enableSystem
         >
-          <div>
-            Just to see
+          <div className="flex items-center w-full bg-white dark:bg-gray-950 justify-between border-b">
             <Link href="/">
-              <div className="flex h-30 items-center justify-between space-x-4 leading-5 sm:-mr-6 sm:space-x-6">
-                <div className="mr-3 w-30 overflow-hidden">
+              <div className="flex px-8 h-30 items-center justify-between space-x-4 leading-5 sm:-mr-6 sm:space-x-6">
+                <div className="mr-3 overflow-hidden">
                   <Image
                     alt={"logo light"}
                     className="block dark:hidden"
