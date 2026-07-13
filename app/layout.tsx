@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import Image from "next/image";
+import Link from "next/link";
 import { ThemeProvider } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -74,7 +76,29 @@ export default function RootLayout({
           disableTransitionOnChange
           enableSystem
         >
-          <div>Just to see</div>
+          <div>
+            Just to see
+            <Link href="/">
+              <div className="flex h-30 items-center justify-between space-x-4 leading-5 sm:-mr-6 sm:space-x-6">
+                <div className="mr-3 w-30 overflow-hidden">
+                  <Image
+                    alt={"logo light"}
+                    className="block dark:hidden"
+                    height={200}
+                    src="/images/logo-light.png"
+                    width={200}
+                  />
+                  <Image
+                    alt={"logo dark"}
+                    className="hidden dark:block"
+                    height={200}
+                    src="/images/logo-dark.png"
+                    width={200}
+                  />
+                </div>
+              </div>
+            </Link>
+          </div>
           <SessionProvider
             basePath={`${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/auth`}
           >
