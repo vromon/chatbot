@@ -74,6 +74,7 @@ export default function RootLayout({
           disableTransitionOnChange
           enableSystem
         >
+          <div>Just to see</div>
           <SessionProvider
             basePath={`${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/auth`}
           >
