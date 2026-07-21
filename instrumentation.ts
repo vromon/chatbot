@@ -1,8 +1,2 @@
-import { OpenTelemetry } from "@ai-sdk/otel";
-import { registerOTel } from "@vercel/otel";
-import { registerTelemetry } from "ai";
-
-export function register() {
-  registerOTel({ serviceName: "chatbot" });
-  registerTelemetry(new OpenTelemetry());
-}
+// Telemetry is only active on Vercel — skipped for local FastAPI-backed dev
+export function register() {}

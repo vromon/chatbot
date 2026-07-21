@@ -1,24 +1,15 @@
-import { ipAddress } from "@vercel/functions";
 import {
   createUIMessageStream,
   createUIMessageStreamResponse,
   generateId,
 } from "ai";
-import { checkBotId } from "botid/server";
 import { after } from "next/server";
 import { createResumableStreamContext } from "resumable-stream";
-import { auth, type UserType } from "@/app/(auth)/auth";
-import { entitlementsByUserType } from "@/lib/ai/entitlements";
-import {
-  allowedModelIds,
-  chatModels,
-  DEFAULT_CHAT_MODEL,
-} from "@/lib/ai/models";
+import { chatModels, DEFAULT_CHAT_MODEL, allowedModelIds } from "@/lib/ai/models";
 import {
   createStreamId,
   deleteChatById,
   getChatById,
-  getMessageCountByUserId,
   getMessagesByChatId,
   saveChat,
   saveMessages,
@@ -27,29 +18,30 @@ import {
 } from "@/lib/db/queries";
 import type { DBMessage } from "@/lib/db/schema";
 import { ChatbotError } from "@/lib/errors";
-import { checkIpRateLimit } from "@/lib/ratelimit";
 import type { ChatMessage } from "@/lib/types";
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
-// ── FastAPI response types ───────────────────────────────────────────────────
+export const maxDuration = 60;
+
+// ── FastAPI response types ────────────────────────────────────────────────────
 interface Activity {
-  description: string;
   title: string;
+  description: string;
 }
 interface DayPlan {
-  afternoon: Activity[];
   day: number;
-  evening: Activity[];
-  morning: Activity[];
   theme: string;
+  morning: Activity[];
+  afternoon: Activity[];
+  evening: Activity[];
 }
 interface TripItinerary {
-  days: DayPlan[];
   destination: string;
-  overview: string;
   total_days: number;
+  overview: string;
+  days: DayPlan[];
 }
 
 const FASTAPI_BASE_URL = process.env.FASTAPI_URL ?? "http://localhost:8000";
@@ -57,27 +49,20 @@ const FASTAPI_BASE_URL = process.env.FASTAPI_URL ?? "http://localhost:8000";
 function formatTripItinerary(trip: TripItinerary): string {
   let text = `## ${trip.destination} — ${trip.total_days} Day Itinerary\n\n`;
   text += `${trip.overview}\n\n`;
-
   for (const day of trip.days) {
     text += `### Day ${day.day}: ${day.theme}\n\n`;
     text += "**Morning**\n";
-    for (const a of day.morning) {
-      text += `- **${a.title}**: ${a.description}\n`;
-    }
+    for (const a of day.morning) text += `- **${a.title}**: ${a.description}\n`;
     text += "\n**Afternoon**\n";
-    for (const a of day.afternoon) {
-      text += `- **${a.title}**: ${a.description}\n`;
-    }
+    for (const a of day.afternoon) text += `- **${a.title}**: ${a.description}\n`;
     text += "\n**Evening**\n";
-    for (const a of day.evening) {
-      text += `- **${a.title}**: ${a.description}\n`;
-    }
+    for (const a of day.evening) text += `- **${a.title}**: ${a.description}\n`;
     text += "\n";
   }
-
   return text;
 }
 
+// ── Resumable stream helper ───────────────────────────────────────────────────
 function getStreamContext() {
   try {
     return createResumableStreamContext({ waitUntil: after });
@@ -88,6 +73,7 @@ function getStreamContext() {
 
 export { getStreamContext };
 
+// ── POST /api/chat ────────────────────────────────────────────────────────────
 export async function POST(request: Request) {
   let requestBody: PostRequestBody;
 
@@ -102,57 +88,30 @@ export async function POST(request: Request) {
     const { id, message, messages, selectedChatModel, selectedVisibilityType } =
       requestBody;
 
-    const [botIdResult, session] = await Promise.all([
-      checkBotId().catch(() => null),
-      auth(),
-    ]);
-
-    if (botIdResult?.isBot) {
-      return new ChatbotError("forbidden:api").toResponse();
-    }
-
-    if (!session?.user) {
-      return new ChatbotError("unauthorized:chat").toResponse();
-    }
-
     const chatModel = allowedModelIds.has(selectedChatModel)
       ? selectedChatModel
       : DEFAULT_CHAT_MODEL;
 
-    await checkIpRateLimit(ipAddress(request));
-
-    const userType: UserType = session.user.type;
-
-    const messageCount = await getMessageCountByUserId({
-      differenceInHours: 1,
-      id: session.user.id,
-    });
-
-    if (messageCount > entitlementsByUserType[userType].maxMessagesPerHour) {
-      return new ChatbotError("rate_limit:chat").toResponse();
-    }
-
     const isToolApprovalFlow = Boolean(messages);
 
+    // ── Load or create the chat record (no-op stubs, FastAPI handles persistence) ──
     const chat = await getChatById({ id });
     let messagesFromDb: DBMessage[] = [];
     let titlePromise: Promise<string> | null = null;
 
     if (chat) {
-      if (chat.userId !== session.user.id) {
-        return new ChatbotError("forbidden:chat").toResponse();
-      }
       messagesFromDb = await getMessagesByChatId({ id });
     } else if (message?.role === "user") {
       await saveChat({
         id,
         title: "New chat",
-        userId: session.user.id,
+        userId: "local-user",
         visibility: selectedVisibilityType,
       });
       titlePromise = generateTitleFromUserMessage({ message });
     }
 
+    // ── Build uiMessages ────────────────────────────────────────────────────
     let uiMessages: ChatMessage[];
 
     if (isToolApprovalFlow && messages) {
@@ -191,6 +150,7 @@ export async function POST(request: Request) {
       ];
     }
 
+    // Save the incoming user message (no-op stub)
     if (message?.role === "user") {
       await saveMessages({
         messages: [
@@ -208,7 +168,7 @@ export async function POST(request: Request) {
 
     const modelConfig = chatModels.find((m) => m.id === chatModel);
 
-    // Extract the latest user message text to send to FastAPI
+    // Extract the latest user message text to forward to FastAPI
     const userText =
       uiMessages
         .at(-1)
@@ -216,34 +176,33 @@ export async function POST(request: Request) {
         .map((p) => (p as { type: "text"; text: string }).text)
         .join("") ?? "";
 
+    // ── Build the UI message stream ─────────────────────────────────────────
     const stream = createUIMessageStream({
       execute: async ({ writer: dataStream }) => {
-        // Tell the UI we are working
+        // 1. Show "waiting" status in the UI
         dataStream.write({
+          type: "data-waiting-status",
+          transient: true,
           data: {
+            phase: "waiting",
             message: "Generating your trip plan...",
             modelId: chatModel,
             modelName: modelConfig?.name ?? chatModel,
-            phase: "waiting",
           },
-          transient: true,
-          type: "data-waiting-status",
         });
 
-        // ── Call FastAPI backend ───────────────────────────────────────────
+        // 2. Call FastAPI backend
         let tripText: string;
         try {
           const fastApiRes = await fetch(`${FASTAPI_BASE_URL}/trip/generate`, {
-            body: JSON.stringify({ user_query: userText }),
-            headers: { "Content-Type": "application/json" },
             method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user_query: userText }),
           });
 
           if (!fastApiRes.ok) {
             const errBody = await fastApiRes.text();
-            throw new Error(
-              `FastAPI returned ${fastApiRes.status}: ${errBody}`
-            );
+            throw new Error(`FastAPI ${fastApiRes.status}: ${errBody}`);
           }
 
           const tripData = (await fastApiRes.json()) as TripItinerary;
@@ -254,29 +213,33 @@ export async function POST(request: Request) {
           tripText = `Sorry, I couldn't generate a trip plan right now.\n\n_${msg}_`;
         }
 
-        // ── Stream the formatted text back to the UI ───────────────────────
+        // 3. Switch status to "thinking"
         dataStream.write({
+          type: "data-waiting-status",
+          transient: true,
           data: {
+            phase: "thinking",
             message: "Thinking...",
             modelId: chatModel,
             modelName: modelConfig?.name ?? chatModel,
-            phase: "thinking",
           },
-          transient: true,
-          type: "data-waiting-status",
         });
 
-        // Write the response as a text part so Messages component renders it
-        dataStream.write({
-          text: tripText,
-          type: "text",
-        });
+        // 4. Write the response text using the correct AI SDK v7 protocol
+        const textId = generateUUID();
+        dataStream.write({ type: "start", messageId: generateUUID() });
+        dataStream.write({ type: "start-step" });
+        dataStream.write({ type: "text-start", id: textId });
+        dataStream.write({ type: "text-delta", id: textId, delta: tripText });
+        dataStream.write({ type: "text-end", id: textId });
+        dataStream.write({ type: "finish-step" });
+        dataStream.write({ type: "finish", finishReason: "stop" });
 
-        // Save the title once we have the response
+        // 5. Update chat title
         if (titlePromise) {
           try {
             const title = await titlePromise;
-            dataStream.write({ data: title, type: "data-chat-title" });
+            dataStream.write({ type: "data-chat-title", data: title });
             updateChatTitleById({ chatId: id, title });
           } catch {
             /* non-fatal */
@@ -288,17 +251,11 @@ export async function POST(request: Request) {
         if (isToolApprovalFlow) {
           await Promise.all(
             finishedMessages.map(async (finishedMsg) => {
-              const existingMsg = uiMessages.find(
-                (m) => m.id === finishedMsg.id
-              );
+              const existingMsg = uiMessages.find((m) => m.id === finishedMsg.id);
               if (existingMsg) {
-                await updateMessage({
-                  id: finishedMsg.id,
-                  parts: finishedMsg.parts,
-                });
+                await updateMessage({ id: finishedMsg.id, parts: finishedMsg.parts });
                 return;
               }
-
               await saveMessages({
                 messages: [
                   {
@@ -315,45 +272,30 @@ export async function POST(request: Request) {
           );
         } else if (finishedMessages.length > 0) {
           await saveMessages({
-            messages: finishedMessages.map((currentMessage) => ({
+            messages: finishedMessages.map((m) => ({
               attachments: [],
               chatId: id,
               createdAt: new Date(),
-              id: currentMessage.id,
-              parts: currentMessage.parts,
-              role: currentMessage.role,
+              id: m.id,
+              parts: m.parts,
+              role: m.role,
             })),
           });
         }
       },
-      onError: (error) => {
-        if (
-          error instanceof Error &&
-          error.message?.includes(
-            "AI Gateway requires a valid credit card on file to service requests"
-          )
-        ) {
-          return "AI Gateway requires a valid credit card on file to service requests. Please visit https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%3Fmodal%3Dadd-credit-card to add a card and unlock your free credits.";
-        }
-        return "Oops, an error occurred!";
-      },
+      onError: () => "Oops, an error occurred!",
       originalMessages: isToolApprovalFlow ? uiMessages : undefined,
     });
 
     return createUIMessageStreamResponse({
       async consumeSseStream({ stream: sseStream }) {
-        if (!process.env.REDIS_URL) {
-          return;
-        }
+        if (!process.env.REDIS_URL) return;
         try {
           const streamContext = getStreamContext();
           if (streamContext) {
             const streamId = generateId();
             await createStreamId({ chatId: id, streamId });
-            await streamContext.createNewResumableStream(
-              streamId,
-              () => sseStream
-            );
+            await streamContext.createNewResumableStream(streamId, () => sseStream);
           }
         } catch {
           /* non-critical */
@@ -362,47 +304,19 @@ export async function POST(request: Request) {
       stream,
     });
   } catch (error) {
-    const vercelId = request.headers.get("x-vercel-id");
-
-    if (error instanceof ChatbotError) {
-      return error.toResponse();
-    }
-
-    if (
-      error instanceof Error &&
-      error.message?.includes(
-        "AI Gateway requires a valid credit card on file to service requests"
-      )
-    ) {
-      return new ChatbotError("bad_request:activate_gateway").toResponse();
-    }
-
-    console.error("Unhandled error in chat API:", error, { vercelId });
+    if (error instanceof ChatbotError) return error.toResponse();
+    console.error("Unhandled error in chat API:", error);
     return new ChatbotError("offline:chat").toResponse();
   }
 }
 
+// ── DELETE /api/chat ──────────────────────────────────────────────────────────
 export async function DELETE(request: Request) {
   const { searchParams } = new URL(request.url);
   const id = searchParams.get("id");
 
-  if (!id) {
-    return new ChatbotError("bad_request:api").toResponse();
-  }
-
-  const session = await auth();
-
-  if (!session?.user) {
-    return new ChatbotError("unauthorized:chat").toResponse();
-  }
-
-  const chat = await getChatById({ id });
-
-  if (chat?.userId !== session.user.id) {
-    return new ChatbotError("forbidden:chat").toResponse();
-  }
+  if (!id) return new ChatbotError("bad_request:api").toResponse();
 
   const deletedChat = await deleteChatById({ id });
-
   return Response.json(deletedChat, { status: 200 });
 }

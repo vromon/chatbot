@@ -1,82 +1,31 @@
 "use server";
 
-import { generateText, type UIMessage } from "ai";
-import { cookies } from "next/headers";
-import { auth } from "@/app/(auth)/auth";
+import type { UIMessage } from "ai";
 import type { VisibilityType } from "@/components/chat/visibility-selector";
-import { titleModel } from "@/lib/ai/models";
-import { titlePrompt } from "@/lib/ai/prompts";
-import { getTitleModel } from "@/lib/ai/providers";
-import {
-  deleteMessagesByChatIdAfterTimestamp,
-  getChatById,
-  getMessageById,
-  updateChatVisibilityById,
-} from "@/lib/db/queries";
-import { getTextFromMessage } from "@/lib/utils";
 
-export async function saveChatModelAsCookie(model: string) {
-  const cookieStore = await cookies();
-  cookieStore.set("chat-model", model);
-}
-
+// Title generation — simple local implementation, no AI SDK needed
 export async function generateTitleFromUserMessage({
   message,
 }: {
   message: UIMessage;
 }) {
-  const { text } = await generateText({
-    instructions: titlePrompt,
-    model: getTitleModel(),
-    prompt: getTextFromMessage(message),
-    providerOptions: {
-      gateway: { order: titleModel.gatewayOrder },
-    },
-  });
-  return text
-    .replace(/^[#*"\s]+/, "")
-    .replace(/["]+$/, "")
-    .trim();
+  const text = message.parts
+    ?.filter((p) => p.type === "text")
+    .map((p) => (p as { type: "text"; text: string }).text)
+    .join("") ?? "";
+
+  // Take first 6 words as title
+  const words = text.trim().split(/\s+/).slice(0, 6).join(" ");
+  return words || "New Chat";
 }
 
-export async function deleteTrailingMessages({ id }: { id: string }) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    throw new Error("Unauthorized");
-  }
-
-  const [message] = await getMessageById({ id });
-  if (!message) {
-    throw new Error("Message not found");
-  }
-
-  const chat = await getChatById({ id: message.chatId });
-  if (!chat || chat.userId !== session.user.id) {
-    throw new Error("Unauthorized");
-  }
-
-  await deleteMessagesByChatIdAfterTimestamp({
-    chatId: message.chatId,
-    timestamp: message.createdAt,
-  });
+export async function deleteTrailingMessages(_params: { id: string }) {
+  // Handled by FastAPI backend
 }
 
-export async function updateChatVisibility({
-  chatId,
-  visibility,
-}: {
+export async function updateChatVisibility(_params: {
   chatId: string;
   visibility: VisibilityType;
 }) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    throw new Error("Unauthorized");
-  }
-
-  const chat = await getChatById({ id: chatId });
-  if (!chat || chat.userId !== session.user.id) {
-    throw new Error("Unauthorized");
-  }
-
-  await updateChatVisibilityById({ chatId, visibility });
+  // Handled by FastAPI backend
 }

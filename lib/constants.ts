@@ -1,5 +1,3 @@
-import { generateDummyPassword } from "./db/utils";
-
 export const isProductionEnvironment = process.env.NODE_ENV === "production";
 export const isDevelopmentEnvironment = process.env.NODE_ENV === "development";
 export const isTestEnvironment = Boolean(
@@ -9,12 +7,11 @@ export const isTestEnvironment = Boolean(
 );
 
 export const guestRegex = /^guest-\d+$/;
-
-export const DUMMY_PASSWORD = generateDummyPassword();
+export const DUMMY_PASSWORD = "";
 
 export const suggestions = [
-  "What are the advantages of using Next.js?",
-  "Write code to demonstrate Dijkstra's algorithm",
-  "Help me write an essay about Silicon Valley",
-  "What is the weather in San Francisco?",
+  "Plan a 5-day trip to Paris",
+  "Plan a 3-day trip to Tokyo",
+  "Plan a week in New York City",
+  "Plan a 4-day trip to Barcelona",
 ];

@@ -6,12 +6,11 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 import "./globals.css";
-import { SessionProvider } from "next-auth/react";
 
 export const metadata: Metadata = {
-  description: "Next.js chatbot template using the AI SDK.",
+  description: "AI Trip Planner",
   metadataBase: new URL("https://chat.vercel.ai"),
-  title: "Next.js Chatbot Template",
+  title: "AI Trip Planner",
 };
 
 export const viewport = {
@@ -69,7 +68,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className="antialiased">
+      <body className="antialiased" suppressHydrationWarning>
         <ThemeProvider
           attribute="class"
           defaultTheme="system"
@@ -81,14 +80,14 @@ export default function RootLayout({
               <div className="flex px-8 h-30 items-center justify-between space-x-4 leading-5 sm:-mr-6 sm:space-x-6">
                 <div className="mr-3 overflow-hidden">
                   <Image
-                    alt={"logo light"}
+                    alt="logo light"
                     className="block dark:hidden"
                     height={200}
                     src="/images/logo-light.png"
                     width={200}
                   />
                   <Image
-                    alt={"logo dark"}
+                    alt="logo dark"
                     className="hidden dark:block"
                     height={200}
                     src="/images/logo-dark.png"
@@ -98,11 +97,7 @@ export default function RootLayout({
               </div>
             </Link>
           </div>
-          <SessionProvider
-            basePath={`${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/auth`}
-          >
-            <TooltipProvider>{children}</TooltipProvider>
-          </SessionProvider>
+          <TooltipProvider>{children}</TooltipProvider>
         </ThemeProvider>
       </body>
     </html>
