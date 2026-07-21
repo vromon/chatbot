@@ -1,12 +1,8 @@
-import { geolocation, ipAddress } from "@vercel/functions";
+import { ipAddress } from "@vercel/functions";
 import {
-  convertToModelMessages,
   createUIMessageStream,
   createUIMessageStreamResponse,
   generateId,
-  isStepCount,
-  streamText,
-  toUIMessageStream,
 } from "ai";
 import { checkBotId } from "botid/server";
 import { after } from "next/server";
@@ -17,17 +13,7 @@ import {
   allowedModelIds,
   chatModels,
   DEFAULT_CHAT_MODEL,
-  getCapabilities,
-  getModelAvailability,
 } from "@/lib/ai/models";
-import { type RequestHints, systemPrompt } from "@/lib/ai/prompts";
-import { getLanguageModel } from "@/lib/ai/providers";
-import { createDocument } from "@/lib/ai/tools/create-document";
-import { editDocument } from "@/lib/ai/tools/edit-document";
-import { getWeather } from "@/lib/ai/tools/get-weather";
-import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
-import { updateDocument } from "@/lib/ai/tools/update-document";
-import { isProductionEnvironment } from "@/lib/constants";
 import {
   createStreamId,
   deleteChatById,
@@ -42,19 +28,54 @@ import {
 import type { DBMessage } from "@/lib/db/schema";
 import { ChatbotError } from "@/lib/errors";
 import { checkIpRateLimit } from "@/lib/ratelimit";
-import type { ChatMessage, WaitingStatusData } from "@/lib/types";
+import type { ChatMessage } from "@/lib/types";
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
-export const maxDuration = 60;
+// ── FastAPI response types ───────────────────────────────────────────────────
+interface Activity {
+  description: string;
+  title: string;
+}
+interface DayPlan {
+  afternoon: Activity[];
+  day: number;
+  evening: Activity[];
+  morning: Activity[];
+  theme: string;
+}
+interface TripItinerary {
+  days: DayPlan[];
+  destination: string;
+  overview: string;
+  total_days: number;
+}
 
-const HEALTH_CHECK_DELAY_MS = 9000;
+const FASTAPI_BASE_URL = process.env.FASTAPI_URL ?? "http://localhost:8000";
 
-function isModelStreamActivity(chunk: { type: string }) {
-  return !["start", "start-step", "finish-step", "finish", "raw"].includes(
-    chunk.type
-  );
+function formatTripItinerary(trip: TripItinerary): string {
+  let text = `## ${trip.destination} — ${trip.total_days} Day Itinerary\n\n`;
+  text += `${trip.overview}\n\n`;
+
+  for (const day of trip.days) {
+    text += `### Day ${day.day}: ${day.theme}\n\n`;
+    text += "**Morning**\n";
+    for (const a of day.morning) {
+      text += `- **${a.title}**: ${a.description}\n`;
+    }
+    text += "\n**Afternoon**\n";
+    for (const a of day.afternoon) {
+      text += `- **${a.title}**: ${a.description}\n`;
+    }
+    text += "\n**Evening**\n";
+    for (const a of day.evening) {
+      text += `- **${a.title}**: ${a.description}\n`;
+    }
+    text += "\n";
+  }
+
+  return text;
 }
 
 function getStreamContext() {
@@ -170,15 +191,6 @@ export async function POST(request: Request) {
       ];
     }
 
-    const { longitude, latitude, city, country } = geolocation(request);
-
-    const requestHints: RequestHints = {
-      city,
-      country,
-      latitude,
-      longitude,
-    };
-
     if (message?.role === "user") {
       await saveMessages({
         messages: [
@@ -195,146 +207,72 @@ export async function POST(request: Request) {
     }
 
     const modelConfig = chatModels.find((m) => m.id === chatModel);
-    const modelCapabilities = await getCapabilities();
-    const capabilities = modelCapabilities[chatModel];
-    const isReasoningModel = capabilities?.reasoning === true;
-    const supportsTools = capabilities?.tools === true;
 
-    const modelMessages = await convertToModelMessages(uiMessages);
+    // Extract the latest user message text to send to FastAPI
+    const userText =
+      uiMessages
+        .at(-1)
+        ?.parts?.filter((p) => p.type === "text")
+        .map((p) => (p as { type: "text"; text: string }).text)
+        .join("") ?? "";
 
     const stream = createUIMessageStream({
       execute: async ({ writer: dataStream }) => {
-        const modelName = modelConfig?.name ?? chatModel;
-        let hasModelActivity = false;
-        let healthCheckTimer: ReturnType<typeof setTimeout> | undefined;
-
-        const clearHealthCheckTimer = () => {
-          if (healthCheckTimer) {
-            clearTimeout(healthCheckTimer);
-          }
-        };
-
-        const writeWaitingStatus = (
-          phase: WaitingStatusData["phase"],
-          messageText: string
-        ) => {
-          if (hasModelActivity && phase !== "thinking") {
-            return;
-          }
-          dataStream.write({
-            data: {
-              message: messageText,
-              modelId: chatModel,
-              modelName,
-              phase,
-            },
-            transient: true,
-            type: "data-waiting-status",
-          });
-        };
-
-        writeWaitingStatus("waiting", "Waiting...");
-
-        healthCheckTimer = setTimeout(() => {
-          getModelAvailability(chatModel)
-            .then((availability) => {
-              if (availability === "impacted") {
-                writeWaitingStatus(
-                  "health",
-                  `${modelName} may be slow or unavailable right now...`
-                );
-              } else {
-                writeWaitingStatus("still-waiting", "Still waiting...");
-              }
-            })
-            .catch(() => {
-              writeWaitingStatus("still-waiting", "Still waiting...");
-            });
-        }, HEALTH_CHECK_DELAY_MS);
-
-        const markModelActive = () => {
-          if (hasModelActivity) {
-            return;
-          }
-          hasModelActivity = true;
-          clearHealthCheckTimer();
-          writeWaitingStatus("thinking", "Thinking...");
-        };
-
-        const stopWaitingStatus = () => {
-          hasModelActivity = true;
-          clearHealthCheckTimer();
-        };
-
-        const result = streamText({
-          activeTools:
-            isReasoningModel && !supportsTools
-              ? []
-              : [
-                  "getWeather",
-                  "createDocument",
-                  "editDocument",
-                  "updateDocument",
-                  "requestSuggestions",
-                ],
-          instructions: systemPrompt({ requestHints, supportsTools }),
-          messages: modelMessages,
-          model: getLanguageModel(chatModel),
-          onAbort() {
-            stopWaitingStatus();
+        // Tell the UI we are working
+        dataStream.write({
+          data: {
+            message: "Generating your trip plan...",
+            modelId: chatModel,
+            modelName: modelConfig?.name ?? chatModel,
+            phase: "waiting",
           },
-          onChunk({ chunk }) {
-            if (isModelStreamActivity(chunk)) {
-              markModelActive();
-            }
-          },
-          onEnd() {
-            stopWaitingStatus();
-          },
-          onError() {
-            stopWaitingStatus();
-          },
-          providerOptions: {
-            ...(modelConfig?.gatewayOrder && {
-              gateway: { order: modelConfig.gatewayOrder },
-            }),
-            ...(modelConfig?.reasoningEffort && {
-              openai: { reasoningEffort: modelConfig.reasoningEffort },
-            }),
-          },
-          stopWhen: isStepCount(5),
-          telemetry: {
-            functionId: "stream-text",
-            isEnabled: isProductionEnvironment,
-          },
-          tools: {
-            createDocument: createDocument({
-              dataStream,
-              modelId: chatModel,
-              session,
-            }),
-            editDocument: editDocument({ dataStream, session }),
-            getWeather,
-            requestSuggestions: requestSuggestions({
-              dataStream,
-              modelId: chatModel,
-              session,
-            }),
-            updateDocument: updateDocument({
-              dataStream,
-              modelId: chatModel,
-              session,
-            }),
-          },
+          transient: true,
+          type: "data-waiting-status",
         });
 
-        dataStream.merge(
-          toUIMessageStream({
-            sendReasoning: isReasoningModel,
-            stream: result.stream,
-          })
-        );
+        // ── Call FastAPI backend ───────────────────────────────────────────
+        let tripText: string;
+        try {
+          const fastApiRes = await fetch(`${FASTAPI_BASE_URL}/trip/generate`, {
+            body: JSON.stringify({ user_query: userText }),
+            headers: { "Content-Type": "application/json" },
+            method: "POST",
+          });
 
+          if (!fastApiRes.ok) {
+            const errBody = await fastApiRes.text();
+            throw new Error(
+              `FastAPI returned ${fastApiRes.status}: ${errBody}`
+            );
+          }
+
+          const tripData = (await fastApiRes.json()) as TripItinerary;
+          tripText = formatTripItinerary(tripData);
+        } catch (err) {
+          const msg =
+            err instanceof Error ? err.message : "Unknown error from FastAPI";
+          tripText = `Sorry, I couldn't generate a trip plan right now.\n\n_${msg}_`;
+        }
+
+        // ── Stream the formatted text back to the UI ───────────────────────
+        dataStream.write({
+          data: {
+            message: "Thinking...",
+            modelId: chatModel,
+            modelName: modelConfig?.name ?? chatModel,
+            phase: "thinking",
+          },
+          transient: true,
+          type: "data-waiting-status",
+        });
+
+        // Write the response as a text part so Messages component renders it
+        dataStream.write({
+          text: tripText,
+          type: "text",
+        });
+
+        // Save the title once we have the response
         if (titlePromise) {
           try {
             const title = await titlePromise;
