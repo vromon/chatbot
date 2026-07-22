@@ -192,48 +192,174 @@ export async function POST(request: Request) {
         });
 
         // 2. Call FastAPI backend
-        let tripText: string;
-        try {
-          const fastApiRes = await fetch(`${FASTAPI_BASE_URL}/trip/generate`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ user_query: userText }),
-          });
+        // let tripText: string;
+        // try {
+        //   const fastApiRes = await fetch(`${FASTAPI_BASE_URL}/trip/generate`, {
+        //     method: "POST",
+        //     headers: { "Content-Type": "application/json" },
+        //     body: JSON.stringify({ user_query: userText }),
+        //   });
 
-          if (!fastApiRes.ok) {
-            const errBody = await fastApiRes.text();
-            throw new Error(`FastAPI ${fastApiRes.status}: ${errBody}`);
-          }
+        //   if (!fastApiRes.ok) {
+        //     const errBody = await fastApiRes.text();
+        //     throw new Error(`FastAPI ${fastApiRes.status}: ${errBody}`);
+        //   }
 
-          const tripData = (await fastApiRes.json()) as TripItinerary;
-          tripText = formatTripItinerary(tripData);
-        } catch (err) {
-          const msg =
-            err instanceof Error ? err.message : "Unknown error from FastAPI";
-          tripText = `Sorry, I couldn't generate a trip plan right now.\n\n_${msg}_`;
-        }
+        //   const tripData = (await fastApiRes.json()) as TripItinerary;
+        //   tripText = formatTripItinerary(tripData);
+        // } catch (err) {
+        //   const msg =
+        //     err instanceof Error ? err.message : "Unknown error from FastAPI";
+        //   tripText = `Sorry, I couldn't generate a trip plan right now.\n\n_${msg}_`;
+        // }
 
-        // 3. Switch status to "thinking"
-        dataStream.write({
-          type: "data-waiting-status",
-          transient: true,
-          data: {
-            phase: "thinking",
-            message: "Thinking...",
-            modelId: chatModel,
-            modelName: modelConfig?.name ?? chatModel,
-          },
-        });
+        // // 3. Switch status to "thinking"
+        // dataStream.write({
+        //   type: "data-waiting-status",
+        //   transient: true,
+        //   data: {
+        //     phase: "thinking",
+        //     message: "Thinking...",
+        //     modelId: chatModel,
+        //     modelName: modelConfig?.name ?? chatModel,
+        //   },
+        // });
 
-        // 4. Write the response text using the correct AI SDK v7 protocol
-        const textId = generateUUID();
-        dataStream.write({ type: "start", messageId: generateUUID() });
-        dataStream.write({ type: "start-step" });
-        dataStream.write({ type: "text-start", id: textId });
-        dataStream.write({ type: "text-delta", id: textId, delta: tripText });
-        dataStream.write({ type: "text-end", id: textId });
-        dataStream.write({ type: "finish-step" });
-        dataStream.write({ type: "finish", finishReason: "stop" });
+        // // 4. Write the response text using the correct AI SDK v7 protocol
+        // const textId = generateUUID();
+        // dataStream.write({ type: "start", messageId: generateUUID() });
+        // dataStream.write({ type: "start-step" });
+        // dataStream.write({ type: "text-start", id: textId });
+        // dataStream.write({ type: "text-delta", id: textId, delta: tripText });
+        // dataStream.write({ type: "text-end", id: textId });
+        // dataStream.write({ type: "finish-step" });
+        // dataStream.write({ type: "finish", finishReason: "stop" });
+
+// 2. Call FastAPI backend
+try {
+  const fastApiRes = await fetch(`${FASTAPI_BASE_URL}/trip/generate`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      user_query: userText,
+    }),
+  });
+
+  if (!fastApiRes.ok) {
+    const errBody = await fastApiRes.text();
+    throw new Error(`FastAPI ${fastApiRes.status}: ${errBody}`);
+  }
+
+  if (!fastApiRes.body) {
+    throw new Error("FastAPI did not return a response stream.");
+  }
+
+  // Switch status to thinking
+  dataStream.write({
+    type: "data-waiting-status",
+    transient: true,
+    data: {
+      phase: "thinking",
+      message: "Thinking...",
+      modelId: chatModel,
+      modelName: modelConfig?.name ?? chatModel,
+    },
+  });
+
+  const reader = fastApiRes.body.getReader();
+  const decoder = new TextDecoder();
+
+  const textId = generateUUID();
+
+  dataStream.write({
+    type: "start",
+    messageId: generateUUID(),
+  });
+
+  dataStream.write({
+    type: "start-step",
+  });
+
+  dataStream.write({
+    type: "text-start",
+    id: textId,
+  });
+
+  while (true) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    const chunk = decoder.decode(value, {
+      stream: true,
+    });
+
+    dataStream.write({
+      type: "text-delta",
+      id: textId,
+      delta: chunk,
+    });
+  }
+
+  dataStream.write({
+    type: "text-end",
+    id: textId,
+  });
+
+  dataStream.write({
+    type: "finish-step",
+  });
+
+  dataStream.write({
+    type: "finish",
+    finishReason: "stop",
+  });
+} catch (err) {
+  const msg =
+    err instanceof Error
+      ? err.message
+      : "Unknown error from FastAPI";
+
+  const textId = generateUUID();
+
+  dataStream.write({
+    type: "start",
+    messageId: generateUUID(),
+  });
+
+  dataStream.write({
+    type: "start-step",
+  });
+
+  dataStream.write({
+    type: "text-start",
+    id: textId,
+  });
+
+  dataStream.write({
+    type: "text-delta",
+    id: textId,
+    delta: `Sorry, I couldn't generate a trip plan right now.\n\n_${msg}_`,
+  });
+
+  dataStream.write({
+    type: "text-end",
+    id: textId,
+  });
+
+  dataStream.write({
+    type: "finish-step",
+  });
+
+  dataStream.write({
+    type: "finish",
+    finishReason: "stop",
+  });
+}
 
         // 5. Update chat title
         if (titlePromise) {
