@@ -1,13 +1,13 @@
 import Form from "next/form";
 
-import { signOut } from "@/app/(auth)/auth";
+//import { signOut } from "@/app/(auth)/auth";
 
 async function signOutAction() {
   "use server";
 
-  await signOut({
-    redirectTo: "/",
-  });
+  // await signOut({
+  //   redirectTo: "/",
+  // });
 }
 
 export const SignOutForm = () => (

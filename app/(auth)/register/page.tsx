@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useSession } from "next-auth/react";
 import { useActionState, useEffect, useState } from "react";
 import { AuthForm } from "@/components/chat/auth-form";
 import { SubmitButton } from "@/components/chat/submit-button";
@@ -19,7 +18,7 @@ export default function Page() {
     { status: "idle" }
   );
 
-  const { update: updateSession } = useSession();
+  //const { update: updateSession } = useSession();
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: router and updateSession are stable refs
   useEffect(() => {
@@ -35,7 +34,7 @@ export default function Page() {
     } else if (state.status === "success") {
       toast({ description: "Account created!", type: "success" });
       setIsSuccessful(true);
-      updateSession();
+      //updateSession();
       router.refresh();
     }
   }, [state.status]);

@@ -4,20 +4,22 @@
 export type UserType = "guest" | "regular";
 
 const DUMMY_USER = {
-  id: "local-user",
   email: "user@local",
+  id: "local-user",
   name: "User",
   type: "regular" as UserType,
 };
 
-export async function auth() {
+export function auth() {
   return {
     user: DUMMY_USER,
   };
 }
 
-export async function signIn(_provider: string, _credentials: unknown) {}
-export async function signOut() {}
+export function signIn(_provider: string, _credentials: unknown) {
+  console.log("signIn called with provider:");
+}
+// export async function signOut() {}
 
 // Kept for NextAuth route handler compatibility
 export const handlers = {
