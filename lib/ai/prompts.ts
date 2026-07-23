@@ -104,7 +104,7 @@ Requirements:
 `;
 
 export const updateDocumentPrompt = (
-  currentContent: string | null,
+  currentContent: string | null | undefined,
   type: ArtifactKind
 ) => {
   const mediaTypes: Record<string, string> = {
@@ -112,10 +112,11 @@ export const updateDocumentPrompt = (
     sheet: "spreadsheet",
   };
   const mediaType = mediaTypes[type] ?? "document";
+  const content = currentContent ?? "";
 
   return `Rewrite the following ${mediaType} based on the given prompt.
 
-${currentContent}`;
+${content}`;
 };
 
 export const titlePrompt = `Generate a short chat title (2-5 words) summarizing the user's message.
